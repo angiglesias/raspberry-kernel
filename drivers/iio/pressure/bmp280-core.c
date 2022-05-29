@@ -66,17 +66,33 @@ struct bmp280_calib {
 	s16 P7;
 	s16 P8;
 	s16 P9;
-	u8  H1;
+	u8 H1;
 	s16 H2;
-	u8  H3;
+	u8 H3;
 	s16 H4;
 	s16 H5;
-	s8  H6;
+	s8 H6;
 };
 
-static const char *const bmp280_supply_names[] = {
-	"vddd", "vdda"
+/* See datasheet Section 3.11.1. */
+struct bmp380_calib {
+	u16 T1;
+	u16 T2;
+	s8 T3;
+	s16 P1;
+	s16 P2;
+	s8 P3;
+	s8 P4;
+	u16 P5;
+	u16 P6;
+	s8 P7;
+	s8 P8;
+	s16 P9;
+	s8 P10;
+	s8 P11;
 };
+
+static const char *const bmp280_supply_names[] = { "vddd", "vdda" };
 
 #define BMP280_NUM_SUPPLIES ARRAY_SIZE(bmp280_supply_names)
 
@@ -90,6 +106,7 @@ struct bmp280_data {
 	union {
 		struct bmp180_calib bmp180;
 		struct bmp280_calib bmp280;
+		struct bmp380_calib bmp380;
 	} calib;
 	struct regulator_bulk_data supplies[BMP280_NUM_SUPPLIES];
 	unsigned int start_up_time; /* in microseconds */
@@ -129,6 +146,25 @@ struct bmp280_chip_info {
 enum { T1, T2, T3 };
 enum { P1, P2, P3, P4, P5, P6, P7, P8, P9 };
 
+enum {
+	/* Temperature calib indexes */
+	BMP380_T1 = 0,
+	BMP380_T2 = 2,
+	BMP380_T3 = 4,
+	/* Pressure calib indexes */
+	BMP380_P1 = 5,
+	BMP380_P2 = 7,
+	BMP380_P3 = 9,
+	BMP380_P4 = 10,
+	BMP380_P5 = 11,
+	BMP380_P6 = 13,
+	BMP380_P7 = 15,
+	BMP380_P8 = 16,
+	BMP380_P9 = 17,
+	BMP380_P10 = 19,
+	BMP380_P11 = 20
+};
+
 static const struct iio_chan_spec bmp280_channels[] = {
 	{
 		.type = IIO_PRESSURE,
@@ -148,8 +184,7 @@ static const struct iio_chan_spec bmp280_channels[] = {
 };
 
 static int bmp280_read_calib(struct bmp280_data *data,
-			     struct bmp280_calib *calib,
-			     unsigned int chip)
+			     struct bmp280_calib *calib, unsigned int chip)
 {
 	int ret;
 	unsigned int tmp;
@@ -160,8 +195,8 @@ static int bmp280_read_calib(struct bmp280_data *data,
 	__le16 p_buf[BMP280_COMP_PRESS_REG_COUNT / 2];
 
 	/* Read temperature calibration values. */
-	ret = regmap_bulk_read(data->regmap, BMP280_REG_COMP_TEMP_START,
-			       t_buf, BMP280_COMP_TEMP_REG_COUNT);
+	ret = regmap_bulk_read(data->regmap, BMP280_REG_COMP_TEMP_START, t_buf,
+			       BMP280_COMP_TEMP_REG_COUNT);
 	if (ret < 0) {
 		dev_err(data->dev,
 			"failed to read temperature calibration parameters\n");
@@ -176,8 +211,8 @@ static int bmp280_read_calib(struct bmp280_data *data,
 	calib->T3 = le16_to_cpu(t_buf[T3]);
 
 	/* Read pressure calibration values. */
-	ret = regmap_bulk_read(data->regmap, BMP280_REG_COMP_PRESS_START,
-			       p_buf, BMP280_COMP_PRESS_REG_COUNT);
+	ret = regmap_bulk_read(data->regmap, BMP280_REG_COMP_PRESS_START, p_buf,
+			       BMP280_COMP_PRESS_REG_COUNT);
 	if (ret < 0) {
 		dev_err(data->dev,
 			"failed to read pressure calibration parameters\n");
@@ -234,7 +269,8 @@ static int bmp280_read_calib(struct bmp280_data *data,
 		return ret;
 	}
 	calib->H4 = sign_extend32(((be16_to_cpu(b16) >> 4) & 0xff0) |
-				  (be16_to_cpu(b16) & 0xf), 11);
+					  (be16_to_cpu(b16) & 0xf),
+				  11);
 
 	ret = regmap_bulk_read(data->regmap, BMP280_REG_COMP_H5, &l16, 2);
 	if (ret < 0) {
@@ -252,6 +288,7 @@ static int bmp280_read_calib(struct bmp280_data *data,
 
 	return 0;
 }
+
 /*
  * Returns humidity in percent, resolution is 0.01 percent. Output value of
  * "47445" represents 47445/1024 = 46.333 %RH.
@@ -265,10 +302,16 @@ static u32 bmp280_compensate_humidity(struct bmp280_data *data,
 	struct bmp280_calib *calib = &data->calib.bmp280;
 
 	var = ((s32)data->t_fine) - (s32)76800;
-	var = ((((adc_humidity << 14) - (calib->H4 << 20) - (calib->H5 * var))
-		+ (s32)16384) >> 15) * (((((((var * calib->H6) >> 10)
-		* (((var * (s32)calib->H3) >> 11) + (s32)32768)) >> 10)
-		+ (s32)2097152) * calib->H2 + 8192) >> 14);
+	var = ((((adc_humidity << 14) - (calib->H4 << 20) - (calib->H5 * var)) +
+		(s32)16384) >>
+	       15) *
+	      (((((((var * calib->H6) >> 10) *
+		   (((var * (s32)calib->H3) >> 11) + (s32)32768)) >>
+		  10) +
+		 (s32)2097152) *
+			calib->H2 +
+		8192) >>
+	       14);
 	var -= ((((var >> 15) * (var >> 15)) >> 7) * (s32)calib->H1) >> 4;
 
 	var = clamp_val(var, 0, 419430400);
@@ -283,17 +326,18 @@ static u32 bmp280_compensate_humidity(struct bmp280_data *data,
  *
  * Taken from datasheet, Section 3.11.3, "Compensation formula".
  */
-static s32 bmp280_compensate_temp(struct bmp280_data *data,
-				  s32 adc_temp)
+static s32 bmp280_compensate_temp(struct bmp280_data *data, s32 adc_temp)
 {
 	s32 var1, var2;
 	struct bmp280_calib *calib = &data->calib.bmp280;
 
-	var1 = (((adc_temp >> 3) - ((s32)calib->T1 << 1)) *
-		((s32)calib->T2)) >> 11;
+	var1 = (((adc_temp >> 3) - ((s32)calib->T1 << 1)) * ((s32)calib->T2)) >>
+	       11;
 	var2 = (((((adc_temp >> 4) - ((s32)calib->T1)) *
-		  ((adc_temp >> 4) - ((s32)calib->T1))) >> 12) *
-		((s32)calib->T3)) >> 14;
+		  ((adc_temp >> 4) - ((s32)calib->T1))) >>
+		 12) *
+		((s32)calib->T3)) >>
+	       14;
 	data->t_fine = var1 + var2;
 
 	return (data->t_fine * 5 + 128) >> 8;
@@ -306,8 +350,7 @@ static s32 bmp280_compensate_temp(struct bmp280_data *data,
  *
  * Taken from datasheet, Section 3.11.3, "Compensation formula".
  */
-static u32 bmp280_compensate_press(struct bmp280_data *data,
-				   s32 adc_press)
+static u32 bmp280_compensate_press(struct bmp280_data *data, s32 adc_press)
 {
 	s64 var1, var2, p;
 	struct bmp280_calib *calib = &data->calib.bmp280;
@@ -317,7 +360,7 @@ static u32 bmp280_compensate_press(struct bmp280_data *data,
 	var2 += (var1 * (s64)calib->P5) << 17;
 	var2 += ((s64)calib->P4) << 35;
 	var1 = ((var1 * var1 * (s64)calib->P3) >> 8) +
-		((var1 * (s64)calib->P2) << 12);
+	       ((var1 * (s64)calib->P2) << 12);
 	var1 = ((((s64)1) << 47) + var1) * ((s64)calib->P1) >> 33;
 
 	if (var1 == 0)
@@ -332,8 +375,7 @@ static u32 bmp280_compensate_press(struct bmp280_data *data,
 	return (u32)p;
 }
 
-static int bmp280_read_temp(struct bmp280_data *data,
-			    int *val)
+static int bmp280_read_temp(struct bmp280_data *data, int *val)
 {
 	int ret;
 	__be32 tmp = 0;
@@ -365,8 +407,7 @@ static int bmp280_read_temp(struct bmp280_data *data,
 	return 0;
 }
 
-static int bmp280_read_press(struct bmp280_data *data,
-			     int *val, int *val2)
+static int bmp280_read_press(struct bmp280_data *data, int *val, int *val2)
 {
 	int ret;
 	__be32 tmp = 0;
@@ -430,8 +471,8 @@ static int bmp280_read_humid(struct bmp280_data *data, int *val, int *val2)
 }
 
 static int bmp280_read_raw(struct iio_dev *indio_dev,
-			   struct iio_chan_spec const *chan,
-			   int *val, int *val2, long mask)
+			   struct iio_chan_spec const *chan, int *val,
+			   int *val2, long mask)
 {
 	int ret;
 	struct bmp280_data *data = iio_priv(indio_dev);
@@ -488,7 +529,7 @@ static int bmp280_read_raw(struct iio_dev *indio_dev,
 }
 
 static int bmp280_write_oversampling_ratio_humid(struct bmp280_data *data,
-					       int val)
+						 int val)
 {
 	int i;
 	const int *avail = data->chip_info->oversampling_humid_avail;
@@ -505,7 +546,7 @@ static int bmp280_write_oversampling_ratio_humid(struct bmp280_data *data,
 }
 
 static int bmp280_write_oversampling_ratio_temp(struct bmp280_data *data,
-					       int val)
+						int val)
 {
 	int i;
 	const int *avail = data->chip_info->oversampling_temp_avail;
@@ -522,7 +563,7 @@ static int bmp280_write_oversampling_ratio_temp(struct bmp280_data *data,
 }
 
 static int bmp280_write_oversampling_ratio_press(struct bmp280_data *data,
-					       int val)
+						 int val)
 {
 	int i;
 	const int *avail = data->chip_info->oversampling_press_avail;
@@ -539,8 +580,8 @@ static int bmp280_write_oversampling_ratio_press(struct bmp280_data *data,
 }
 
 static int bmp280_write_raw(struct iio_dev *indio_dev,
-			    struct iio_chan_spec const *chan,
-			    int val, int val2, long mask)
+			    struct iio_chan_spec const *chan, int val, int val2,
+			    long mask)
 {
 	int ret = 0;
 	struct bmp280_data *data = iio_priv(indio_dev);
@@ -575,9 +616,8 @@ static int bmp280_write_raw(struct iio_dev *indio_dev,
 }
 
 static int bmp280_read_avail(struct iio_dev *indio_dev,
-			     struct iio_chan_spec const *chan,
-			     const int **vals, int *type, int *length,
-			     long mask)
+			     struct iio_chan_spec const *chan, const int **vals,
+			     int *type, int *length, long mask)
 {
 	struct bmp280_data *data = iio_priv(indio_dev);
 
@@ -615,22 +655,18 @@ static int bmp280_chip_config(struct bmp280_data *data)
 		  BMP280_OSRS_PRESS_X(data->oversampling_press + 1);
 
 	ret = regmap_write_bits(data->regmap, BMP280_REG_CTRL_MEAS,
-				 BMP280_OSRS_TEMP_MASK |
-				 BMP280_OSRS_PRESS_MASK |
-				 BMP280_MODE_MASK,
-				 osrs | BMP280_MODE_NORMAL);
+				BMP280_OSRS_TEMP_MASK | BMP280_OSRS_PRESS_MASK |
+					BMP280_MODE_MASK,
+				osrs | BMP280_MODE_NORMAL);
 	if (ret < 0) {
-		dev_err(data->dev,
-			"failed to write ctrl_meas register\n");
+		dev_err(data->dev, "failed to write ctrl_meas register\n");
 		return ret;
 	}
 
 	ret = regmap_update_bits(data->regmap, BMP280_REG_CONFIG,
-				 BMP280_FILTER_MASK,
-				 BMP280_FILTER_4X);
+				 BMP280_FILTER_MASK, BMP280_FILTER_4X);
 	if (ret < 0) {
-		dev_err(data->dev,
-			"failed to write config register\n");
+		dev_err(data->dev, "failed to write config register\n");
 		return ret;
 	}
 
@@ -661,7 +697,7 @@ static int bme280_chip_config(struct bmp280_data *data)
 	 * temperature/pressure is set to become effective.
 	 */
 	ret = regmap_update_bits(data->regmap, BMP280_REG_CTRL_HUMIDITY,
-				  BMP280_OSRS_HUMIDITY_MASK, osrs);
+				 BMP280_OSRS_HUMIDITY_MASK, osrs);
 
 	if (ret < 0)
 		return ret;
@@ -683,6 +719,214 @@ static const struct bmp280_chip_info bme280_chip_info = {
 	.read_temp = bmp280_read_temp,
 	.read_press = bmp280_read_press,
 	.read_humid = bmp280_read_humid,
+};
+
+/*
+ * Returns temperature in DegC, resolution is 0.01 DegC.  Output value of
+ * "5123" equals 51.23 DegC.  t_fine carries fine temperature as global
+ * value.
+ *
+ * Taken from datasheet, Section Appendix 9, "Compensation formula".
+ */
+static s32 bmp380_compensate_temp(struct bmp280_data *data, u32 adc_temp)
+{
+	s64 var1, var2, var3, var4, var5, var6;
+	struct bmp380_calib *calib = &data->calib.bmp380;
+
+	var1 = ((s64) adc_temp) - (((s64) calib->T1) << 8);
+	var2 = var1 * ((s64) calib->T2);
+	var3 = var1 * var1;
+	var4 = var3 * ((s64) calib->T3);
+	var5 = (var2 << 18) + var4;
+	var6 = var5 >> 32;
+	data->t_fine = (s32) var6;
+	var6 = (var6 * 25) >> 14;
+
+	if (var6 < BMP380_MIN_TEMP)
+		var6 = BMP380_MIN_TEMP;
+	else if (var6 > BMP380_MAX_TEMP)
+		var6 = BMP380_MAX_TEMP;
+
+	return (s32) var6;
+}
+
+/*
+ * Returns pressure in Pa as unsigned 32 bit integer in Q24.8 format (24
+ * integer bits and 8 fractional bits).  Output value of "24674867"
+ * represents 24674867/256 = 96386.2 Pa = 963.862 hPa
+ *
+ * Taken from datasheet, Section 3.11.3, "Compensation formula".
+ */
+static u32 bmp380_compensate_press(struct bmp280_data *data, u32 adc_press)
+{
+	s64 var1, var2, var3, var4, out1, out2;
+	struct bmp380_calib *calib = &data->calib.bmp380;
+
+	var1 = (((s64)calib->P6) * ((s64)data->t_fine)) >> 6;
+	var2 = (((s64)calib->P7) * ((s64)data->t_fine) * ((s64)data->t_fine)) >> 8;
+	var3 = (((s64)calib->P8) * ((s64)data->t_fine) * ((s64)data->t_fine) *
+			((s64)data->t_fine)) >> 15;
+	out1 = (((s64)calib->P5)>>3) + var1 + var2 + var3;
+	
+	var1 = ((((s64)calib->P2) - (1<<14)) * ((s64)data->t_fine)) >> 29;
+	var2 = (((s64)calib->P3) * ((s64)data->t_fine) * ((s64)data->t_fine)) >> 32;
+	var3 = (((s64)calib->P4) * ((s64)data->t_fine) * ((s64)data->t_fine) * ((s64)data->t_fine)) >> 37;
+	out2 = (((s64)adc_press) * (((s64) calib->P1) - (1<<14)) + (var1 << 20) + (var2 << 20) + (var3 <<20)) >> 20;
+
+	var1 = ((s64)adc_press) *  ((s64)adc_press);
+	var2 = ((s64)calib->P9) + ((s64)calib->P10)*((s64)data->t_fine);
+	var3 = (var1 * var2);
+	var4 = (s64) (((((__int128) var3) << 17) + ((((__int128)adc_press) * ((__int128)adc_press) * ((__int128)adc_press)) * ((__int128)calib->P11))) >> 65);
+
+	return (u32) (out1 + out2 + var4);
+}
+
+static int bmp380_read_temp(struct bmp280_data *data, int *val)
+{
+	int ret;
+	__le32 tmp = 0;
+	s32 adc_temp, comp_temp;
+
+	ret = regmap_bulk_read(data->regmap, BMP380_REG_TEMP_XLSB, &tmp, 3);
+	if (ret < 0) {
+		dev_err(data->dev, "failed to read temperature\n");
+		return ret;
+	}
+
+	adc_temp = sign_extend32(le32_to_cpu(tmp), 23);
+	if (adc_temp == BMP280_TEMP_SKIPPED) {
+		/* reading was skipped */
+		dev_err(data->dev, "reading temperature skipped\n");
+		return -EIO;
+	}
+	comp_temp = bmp380_compensate_temp(data, adc_temp);
+
+	/*
+	 * val might be NULL if we're called by the read_press routine,
+	 * who only cares about the carry over t_fine value.
+	 */
+	if (val) {
+		*val = comp_temp * 10;
+		return IIO_VAL_INT;
+	}
+
+	return 0;
+}
+
+static int bmp380_read_press(struct bmp280_data *data, int *val, int *val2)
+{
+	int ret;
+	__le32 tmp = 0;
+	u32 adc_press;
+	s32 comp_press;
+
+	/* Read and compensate temperature so we get a reading of t_fine. */
+	ret = bmp380_read_temp(data, NULL);
+	if (ret < 0)
+		return ret;
+
+	ret = regmap_bulk_read(data->regmap, BMP380_REG_PRESS_XLSB, &tmp, 3);
+	if (ret < 0) {
+		dev_err(data->dev, "failed to read pressure\n");
+		return ret;
+	}
+
+	adc_press = le32_to_cpu(tmp);
+	if (adc_press == BMP280_PRESS_SKIPPED) {
+		/* reading was skipped */
+		dev_err(data->dev, "reading pressure skipped\n");
+		return -EIO;
+	}
+	comp_press = bmp380_compensate_press(data, adc_press);
+
+	*val = comp_press;
+	*val2 = 256000;
+
+	return IIO_VAL_FRACTIONAL;
+}
+
+static int bmp380_read_calib(struct bmp280_data *data,
+			     struct bmp380_calib *calib, unsigned int chip)
+{
+	int ret;
+	u8 buf[BMP380_CALIB_REG_COUNT];
+
+	/* Read temperature calibration values. */
+	ret = regmap_bulk_read(data->regmap, BMP380_REG_CALIB_TEMP_START, buf,
+			       BMP380_CALIB_REG_COUNT);
+	if (ret < 0) {
+		dev_err(data->dev,
+			"failed to read temperature calibration parameters\n");
+		return ret;
+	}
+
+	/* Toss the temperature calibration data into the entropy pool */
+	add_device_randomness(buf, sizeof(buf));
+
+	/* Parse calibration data */
+	calib->T1 = le16_from_bytes(buf[BMP380_T1], buf[BMP380_T1 + 1]) / 1 << 8;
+	calib->T2 = le16_from_bytes(buf[BMP380_T2], buf[BMP380_T2 + 1]) / 1 << 30;
+	calib->T3 = sign_extend32(buf[BMP380_T3], 7);
+	calib->P1 = sign_extend32(le16_from_bytes(buf[BMP380_P1], buf[BMP380_P1 + 1]), 15);
+	calib->P2 = sign_extend32(le16_from_bytes(buf[BMP380_P2], buf[BMP380_P2 + 1]), 15);
+	calib->P3 = sign_extend32(buf[BMP380_P3], 7);
+	calib->P4 = sign_extend32(buf[BMP380_P4], 7);
+	calib->P5 = sign_extend32(le16_from_bytes(buf[BMP380_P5], buf[BMP380_P5 + 1]), 15);
+	calib->P6 = sign_extend32(le16_from_bytes(buf[BMP380_P6], buf[BMP380_P6 + 1]), 15);
+	calib->P7 = sign_extend32(buf[BMP380_P7], 7);
+	calib->P8 = sign_extend32(buf[BMP380_P8], 7);
+	calib->P9 = sign_extend32(le16_from_bytes(buf[BMP380_P9], buf[BMP380_P9 + 1]), 15);
+	calib->P10 = sign_extend32(buf[BMP380_P10], 7);
+	calib->P11 = sign_extend32(buf[BMP380_P11], 7);
+
+	return 0;
+}
+
+static int bmp380_chip_config(struct bmp280_data *data)
+{
+	int ret;
+	/* configure oversampling */
+	u8 osrs = BMP380_OSRS_TEMP_X(data->oversampling_temp) |
+		  BMP380_OSRS_PRESS_X(data->oversampling_press);
+
+	ret = regmap_write_bits(data->regmap, BMP380_REG_OSR,
+				BMP380_OSRS_TEMP_MASK | BMP380_OSRS_PRESS_MASK, osrs);
+	if (ret < 0) {
+		dev_err(data->dev, "failed to write oversampling register\n");
+		return ret;
+	}
+	/* configure power control register */
+	ret = regmap_write_bits(data->regmap, BMP380_REG_POWER_CONTROL,
+				BMP380_CTRL_SENSORS_MASK | BMP380_MODE_MASK,
+				BMP380_CTRL_SENSORS_PRESS_EN | BMP380_CTRL_SENSORS_TEMP_EN |
+					BMP380_MODE_NORMAL);
+	if (ret < 0) {
+		dev_err(data->dev, "failed to write operation control register\n");
+		return ret;
+	}
+
+	ret = regmap_update_bits(data->regmap, BMP380_REG_CONFIG,
+				 BMP380_FILTER_MASK, BMP380_FILTER_3X);
+	if (ret < 0) {
+		dev_err(data->dev, "failed to write config register\n");
+		return ret;
+	}
+
+	return ret;
+}
+
+static const int bmp380_oversampling_avail[] = { 1, 2, 4, 8, 16, 32 };
+
+static const struct bmp280_chip_info bmp380_chip_info = {
+	.oversampling_temp_avail = bmp380_oversampling_avail,
+	.num_oversampling_temp_avail = ARRAY_SIZE(bmp380_oversampling_avail),
+
+	.oversampling_press_avail = bmp380_oversampling_avail,
+	.num_oversampling_press_avail = ARRAY_SIZE(bmp380_oversampling_avail),
+
+	.chip_config = bmp380_chip_config,
+	.read_temp = bmp380_read_temp,
+	.read_press = bmp380_read_press,
 };
 
 static int bmp180_measure(struct bmp280_data *data, u8 ctrl_meas)
@@ -880,8 +1124,7 @@ static u32 bmp180_compensate_press(struct bmp280_data *data, s32 adc_press)
 	return p + ((x1 + x2 + 3791) >> 4);
 }
 
-static int bmp180_read_press(struct bmp280_data *data,
-			     int *val, int *val2)
+static int bmp180_read_press(struct bmp280_data *data, int *val, int *val2)
 {
 	int ret;
 	s32 adc_press;
@@ -935,9 +1178,7 @@ static irqreturn_t bmp085_eoc_irq(int irq, void *d)
 	return IRQ_HANDLED;
 }
 
-static int bmp085_fetch_eoc_irq(struct device *dev,
-				const char *name,
-				int irq,
+static int bmp085_fetch_eoc_irq(struct device *dev, const char *name, int irq,
 				struct bmp280_data *data)
 {
 	unsigned long irq_trig;
@@ -945,19 +1186,15 @@ static int bmp085_fetch_eoc_irq(struct device *dev,
 
 	irq_trig = irqd_get_trigger_type(irq_get_irq_data(irq));
 	if (irq_trig != IRQF_TRIGGER_RISING) {
-		dev_err(dev, "non-rising trigger given for EOC interrupt, trying to enforce it\n");
+		dev_err(dev,
+			"non-rising trigger given for EOC interrupt, trying to enforce it\n");
 		irq_trig = IRQF_TRIGGER_RISING;
 	}
 
 	init_completion(&data->done);
 
-	ret = devm_request_threaded_irq(dev,
-			irq,
-			bmp085_eoc_irq,
-			NULL,
-			irq_trig,
-			name,
-			data);
+	ret = devm_request_threaded_irq(dev, irq, bmp085_eoc_irq, NULL,
+					irq_trig, name, data);
 	if (ret) {
 		/* Bail out without IRQ but keep the driver in place */
 		dev_err(dev, "unable to request DRDY IRQ\n");
@@ -984,11 +1221,8 @@ static void bmp280_regulators_disable(void *data)
 	regulator_bulk_disable(BMP280_NUM_SUPPLIES, supplies);
 }
 
-int bmp280_common_probe(struct device *dev,
-			struct regmap *regmap,
-			unsigned int chip,
-			const char *name,
-			int irq)
+int bmp280_common_probe(struct device *dev, struct regmap *regmap,
+			unsigned int chip, const char *name, int irq)
 {
 	int ret;
 	struct iio_dev *indio_dev;
@@ -1032,17 +1266,22 @@ int bmp280_common_probe(struct device *dev,
 		data->oversampling_temp = ilog2(2);
 		data->start_up_time = 2000;
 		break;
+	case BMP380_CHIP_ID:
+		indio_dev->num_channels = 2;
+		data->chip_info = &bmp380_chip_info;
+		data->oversampling_press = ilog2(2);
+		data->oversampling_temp = ilog2(2);
+		data->start_up_time = 2000;
+		break;
 	default:
 		return -EINVAL;
 	}
 
 	/* Bring up regulators */
-	regulator_bulk_set_supply_names(data->supplies,
-					bmp280_supply_names,
+	regulator_bulk_set_supply_names(data->supplies, bmp280_supply_names,
 					BMP280_NUM_SUPPLIES);
 
-	ret = devm_regulator_bulk_get(dev,
-				      BMP280_NUM_SUPPLIES, data->supplies);
+	ret = devm_regulator_bulk_get(dev, BMP280_NUM_SUPPLIES, data->supplies);
 	if (ret) {
 		dev_err(dev, "failed to get regulators\n");
 		return ret;
@@ -1071,12 +1310,23 @@ int bmp280_common_probe(struct device *dev,
 	}
 
 	data->regmap = regmap;
-	ret = regmap_read(regmap, BMP280_REG_ID, &chip_id);
+	switch (chip) {
+	case BMP180_CHIP_ID:
+	case BMP280_CHIP_ID:
+	case BME280_CHIP_ID:
+		ret = regmap_read(regmap, BMP280_REG_ID, &chip_id);
+		break;
+	case BMP380_CHIP_ID:
+		ret = regmap_read(regmap, BMP380_REG_ID, &chip_id);
+		break;
+	default:
+		ret = -EINVAL;
+	}
 	if (ret < 0)
 		return ret;
 	if (chip_id != chip) {
-		dev_err(dev, "bad chip id: expected %x got %x\n",
-			chip, chip_id);
+		dev_err(dev, "bad chip id: expected %x got %x\n", chip,
+			chip_id);
 		return -EINVAL;
 	}
 
@@ -1091,20 +1341,32 @@ int bmp280_common_probe(struct device *dev,
 	 * non-volatile memory during production". Let's read them out at probe
 	 * time once. They will not change.
 	 */
-	if (chip_id  == BMP180_CHIP_ID) {
+	switch (chip_id) {
+	case BMP180_CHIP_ID:
 		ret = bmp180_read_calib(data, &data->calib.bmp180);
 		if (ret < 0) {
 			dev_err(data->dev,
 				"failed to read calibration coefficients\n");
 			return ret;
 		}
-	} else if (chip_id == BMP280_CHIP_ID || chip_id == BME280_CHIP_ID) {
+		break;
+	case BMP280_CHIP_ID:
+	case BME280_CHIP_ID:
 		ret = bmp280_read_calib(data, &data->calib.bmp280, chip_id);
 		if (ret < 0) {
 			dev_err(data->dev,
 				"failed to read calibration coefficients\n");
 			return ret;
 		}
+		break;
+	case BMP380_CHIP_ID:
+		ret = bmp380_read_calib(data, &data->calib.bmp380, chip_id);
+		if (ret < 0) {
+			dev_err(data->dev,
+				"failed to read calibration coefficients\n");
+			return ret;
+		}
+		break;
 	}
 
 	/*
@@ -1112,7 +1374,7 @@ int bmp280_common_probe(struct device *dev,
 	 * however as it happens, the BMP085 shares the chip ID of BMP180
 	 * so we look for an IRQ if we have that.
 	 */
-	if (irq > 0 || (chip_id  == BMP180_CHIP_ID)) {
+	if (irq > 0 || (chip_id == BMP180_CHIP_ID)) {
 		ret = bmp085_fetch_eoc_irq(dev, name, irq, data);
 		if (ret)
 			return ret;
@@ -1164,11 +1426,12 @@ static int bmp280_runtime_resume(struct device *dev)
 const struct dev_pm_ops bmp280_dev_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
 				pm_runtime_force_resume)
-	SET_RUNTIME_PM_OPS(bmp280_runtime_suspend,
-			   bmp280_runtime_resume, NULL)
+		SET_RUNTIME_PM_OPS(bmp280_runtime_suspend,
+				   bmp280_runtime_resume, NULL)
 };
 EXPORT_SYMBOL(bmp280_dev_pm_ops);
 
 MODULE_AUTHOR("Vlad Dogaru <vlad.dogaru@intel.com>");
-MODULE_DESCRIPTION("Driver for Bosch Sensortec BMP180/BMP280 pressure and temperature sensor");
+MODULE_DESCRIPTION(
+	"Driver for Bosch Sensortec BMP180/BMP280 pressure and temperature sensor");
 MODULE_LICENSE("GPL v2");

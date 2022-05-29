@@ -3,6 +3,87 @@
 #include <linux/device.h>
 #include <linux/regmap.h>
 
+/* BMP380 specific registers */
+#define BMP380_REG_CMD				0x7E
+#define BMP380_REG_CONFIG			0x1F
+#define BMP380_REG_ODR				0X1D
+#define BMP380_REG_OSR				0X1C
+#define BMP380_REG_POWER_CONTROL	0X1B
+#define BMP380_REG_IF_CONFIG		0X1A
+#define BMP380_REG_INT_CONTROL		0X19
+#define BMP380_REG_INT_STATUS		0X11
+#define BMP380_REG_EVENT			0X10
+#define BMP380_REG_STATUS			0X03
+#define BMP380_REG_ERROR			0X02
+#define BMP380_REG_ID				0X00
+
+
+
+#define BMP380_REG_FIFO_CONFIG_1		0X18
+#define BMP380_REG_FIFO_CONFIG_2		0X17
+#define BMP380_REG_FIFO_WATERMARK_MSB	0X16		
+#define BMP380_REG_FIFO_WATERMARK_LSB	0X15
+#define BMP380_REG_FIFO_DATA			0X14
+#define BMP380_REG_FIFO_LENGTH_MSB		0X13
+#define BMP380_REG_FIFO_LENGTH_LSB		0X12
+
+#define BMP380_REG_SENSOR_TIME_MSB		0X0E
+#define BMP380_REG_SENSOR_TIME_LSB		0X0D
+#define BMP380_REG_SENSOR_TIME_XLSB		0X0C
+
+#define  BMP380_REG_TEMP_MSB			0X09
+#define BMP380_REG_TEMP_LSB				0X08
+#define BMP380_REG_TEMP_XLSB			0X07
+
+#define BMP380_REG_PRESS_MSB			0X06
+#define BMP380_REG_PRESS_LSB			0X05
+#define BMP380_REG_PRESS_XLSB			0X04
+
+#define BMP380_REG_CALIB_TEMP_START		0x31
+#define BMP380_CALIB_REG_COUNT			21
+#define le16_from_bytes(lsb, msb)		(le16_to_cpu((((__le16)msb << 8) | (__le16) lsb)))
+
+#define BMP380_FILTER_MASK		(BIT(3) | BIT(2) | BIT(1))
+#define BMP380_FILTER_OFF		0
+#define BMP380_FILTER_1X		BIT(1)
+#define BMP380_FILTER_3X		BIT(2)
+#define BMP380_FILTER_7X		(BIT(2) | BIT(1))
+#define BMP380_FILTER_15X		BIT(3)
+#define BMP380_FILTER_31X		(BIT(3) | BIT(1))
+#define BMP380_FILTER_63X		(BIT(3) | BIT(2))
+#define BMP380_FILTER_127X		(BIT(3) | BIT(2) | BIT(1))
+
+#define BMP380_OSRS_TEMP_MASK		(BIT(5) | BIT(4) | BIT(3))
+#define BMP380_OSRS_TEMP_X(osrs_t)	((osrs_t) << 3)
+#define BMP380_OSRS_TEMP_1X			BMP380_OSRS_TEMP_X(0)
+#define BMP380_OSRS_TEMP_2X			BMP380_OSRS_TEMP_X(1)
+#define BMP380_OSRS_TEMP_4X			BMP380_OSRS_TEMP_X(2)
+#define BMP380_OSRS_TEMP_8X			BMP380_OSRS_TEMP_X(3)
+#define BMP380_OSRS_TEMP_16X		BMP380_OSRS_TEMP_X(4)
+#define BMP380_OSRS_TEMP_32X		BMP380_OSRS_TEMP_X(5)
+
+#define BMP380_OSRS_PRESS_MASK		(BIT(2) | BIT(1) | BIT(0))
+#define BMP380_OSRS_PRESS_X(osrs_p)	((osrs_p) << 0)
+#define BMP380_OSRS_PRESS_1X		BMP380_OSRS_PRESS_X(0)
+#define BMP380_OSRS_PRESS_2X		BMP380_OSRS_PRESS_X(1)
+#define BMP380_OSRS_PRESS_4X		BMP380_OSRS_PRESS_X(2)
+#define BMP380_OSRS_PRESS_8X		BMP380_OSRS_PRESS_X(3)
+#define BMP380_OSRS_PRESS_16X		BMP380_OSRS_PRESS_X(4)
+#define BMP380_OSRS_PRESS_32X		BMP380_OSRS_PRESS_X(5)
+
+#define BMP380_CTRL_SENSORS_MASK		(BIT(1) | BIT(0))
+#define BMP380_CTRL_SENSORS_PRESS_EN	BIT(0)
+#define BMP380_CTRL_SENSORS_TEMP_EN		BIT(1)
+#define BMP380_MODE_MASK		(BIT(5) | BIT(4))
+#define BMP380_MODE_SLEEP		0
+#define BMP380_MODE_FORCED		BIT(4)
+#define BMP380_MODE_NORMAL		(BIT(5) | BIT(4))
+
+#define BMP380_MIN_TEMP		-4000
+#define BMP380_MAX_TEMP		8500
+#define BMP380_MIN_PRES		3000000
+#define BMP380_MAX_PRES		12500000
+
 /* BMP280 specific registers */
 #define BMP280_REG_HUMIDITY_LSB		0xFE
 #define BMP280_REG_HUMIDITY_MSB		0xFD
@@ -92,6 +173,7 @@
 #define BMP280_REG_RESET		0xE0
 #define BMP280_REG_ID			0xD0
 
+#define BMP380_CHIP_ID			0x50
 #define BMP180_CHIP_ID			0x55
 #define BMP280_CHIP_ID			0x58
 #define BME280_CHIP_ID			0x60
@@ -105,6 +187,7 @@
 /* Regmap configurations */
 extern const struct regmap_config bmp180_regmap_config;
 extern const struct regmap_config bmp280_regmap_config;
+extern const struct regmap_config bmp380_regmap_config;
 
 /* Probe called from different transports */
 int bmp280_common_probe(struct device *dev,
